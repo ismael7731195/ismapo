@@ -1,0 +1,157 @@
+name: Validar y empaquetar PowerShell M02-P03 REV2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'parser-test/m02p03-rev2/**'
+      - '.github/workflows/validar-powershell-m02-p03-rev2.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Analizador sintactico real Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m02p03-rev2'
+          $files = @(Get-ChildItem -LiteralPath $base -Filter '*.ps1' -File -Recurse)
+          if ($files.Count -ne 4) { throw "Se esperaban 4 archivos ps1 y se encontraron $($files.Count)." }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object {
+                Write-Error ("{0}: linea {1}, columna {2}: {3}" -f $file.Name,$_.Extent.StartLineNumber,$_.Extent.StartColumnNumber,$_.Message)
+              }
+              exit 1
+            }
+            Write-Host ("PARSER_OK={0};TOKENS={1}" -f $file.Name,$tokens.Count)
+          }
+          Write-Host ("POWERSHELL_VERSION={0}" -f $PSVersionTable.PSVersion)
+
+      - name: Prueba del contrato escalar SQL
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m02p03-rev2'
+          $global:Out = Join-Path $env:RUNNER_TEMP 'sql-contract-test'
+          $global:Log = Join-Path $global:Out 'test.log'
+          $global:SqlChecks = New-Object System.Collections.Generic.List[object]
+          New-Item -ItemType Directory -Path $global:Out -Force | Out-Null
+          . (Join-Path $base 'lib\Funciones.ps1')
+          function Invoke-ReadOnlySql {
+            param(
+              [System.Data.SqlClient.SqlConnection]$Connection,
+              [string]$Name,
+              [string]$Query
+            )
+            return [int]7
+          }
+          $rows = Invoke-SafeReadOnlySql -Connection $null -Name 'PRUEBA_CONTRATO' -Query 'SELECT 1;' -Required $true
+          if ($rows -ne 7) { throw "Contrato escalar incorrecto: $rows" }
+          if ($global:SqlChecks.Count -ne 1) { throw 'No se registro exactamente una comprobacion SQL.' }
+          if ($global:SqlChecks[0].Estado -ne 'OK') { throw 'La comprobacion SQL no quedo aprobada.' }
+          if ([int]$global:SqlChecks[0].Filas -ne 7) { throw 'El numero de filas no se conservo como escalar.' }
+          Write-Host 'CONTRATO_SQL_ESCALAR=APROBADO'
+
+      - name: Autoprueba sintetica en carpeta limpia
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m02p03-rev2'
+          $root = Join-Path $env:RUNNER_TEMP 'm02p03-rev2-synthetic'
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          New-Item $root -ItemType Directory -Force | Out-Null
+          $content = @{
+            'src\AgroInpaco.Web\Components\Pages\Documentos\Operacion.razor' = 'MaxUploadBytes=50L*1024L*1024L SaveTempAsync _templateId=_templates.FirstOrDefault ModuloOrigen EntidadOrigen IdRegistroOrigen /erp/auditoria /erp/informes IdCategoriaDocumental IdCarpetaDocumental'
+            'src\Legacy\AgroEmpaques.Application\Services\DocumentosService.vb' = 'Path.GetExtension TamanoMaximoMB BuscarTipoArchivo GuardarArchivo IdCategoriaDocumental IdCarpetaDocumental Extension'
+            'src\Legacy\AgroEmpaques.Infrastructure\Services\AlmacenDocumentalService.vb' = 'documentos_agroempaques.ini File.Copy CalcularHash RutaArchivo'
+            'src\Legacy\AgroEmpaques.Infrastructure\Services\ArchivoCargaMasivaReader.vb' = 'Path.GetExtension ZipFile.OpenRead File.ReadAllLines XDocument.Load CalcularHash GenerarPlantilla'
+            'src\Legacy\AgroEmpaques.Application\Services\CargaMasivaService.vb' = 'Hash CrearLote Procesar Validar PermiteProcesar'
+            'src\AgroInpaco.Web\Components\Pages\Terceros\Edit.razor' = '@bind Responsabilidad Contacto Direccion Rol Clasificacion TipoPersona TipoIdentificacion NumeroIdentificacion DigitoVerificacion'
+            'SQL\dummy.sql' = 'SELECT 1;'
+          }
+          foreach ($entry in $content.GetEnumerator()) {
+            $path = Join-Path $root $entry.Key
+            New-Item (Split-Path -Parent $path) -ItemType Directory -Force | Out-Null
+            Set-Content -LiteralPath $path -Value $entry.Value -Encoding UTF8
+          }
+          $script = Join-Path $base '01_EJECUTAR_DIAGNOSTICO_M02_P03_D01_REV2.ps1'
+          & $script -Root $root -OmitirSql
+          if ($LASTEXITCODE -ne 0) { throw "Autoprueba devolvio codigo $LASTEXITCODE." }
+          $zip = Get-ChildItem $base -Filter 'RESULTADOS_M02_P03_D01_REV2_*.zip' -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $zip) { throw 'No se genero el ZIP de resultados.' }
+          $check = Join-Path $env:RUNNER_TEMP 'm02p03-rev2-result'
+          if (Test-Path $check) { Remove-Item $check -Recurse -Force }
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $check -Force
+          $result = Get-Content -LiteralPath (Join-Path $check 'RESULTADO.txt') -Raw
+          foreach ($expected in @('SQL=OMITIDO','CAMBIOS_DATOS=0','INTEGRIDAD=FUENTE_INTACTA','CODIGO_FINAL=0')) {
+            if ($result -notmatch [regex]::Escape($expected)) { throw "Falta evidencia: $expected" }
+          }
+          $log = Get-Content -LiteralPath (Join-Path $check 'EJECUCION.log') -Raw
+          if ($log -notmatch 'CODIGO_FINAL=0') { throw 'El log empaquetado no contiene el cierre exitoso.' }
+          Remove-Item -LiteralPath $zip.FullName -Force
+          Get-ChildItem $base -Directory -Filter 'RESULTADOS_M02_P03_D01_REV2_*' | Remove-Item -Recurse -Force
+          Write-Host 'AUTOPRUEBA_SINTETICA=APROBADA'
+
+      - name: Verificar CMD sin BOM
+        shell: powershell
+        run: |
+          $cmd = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m02p03-rev2\00_EJECUTAR_DIAGNOSTICO_M02_P03_D01_REV2.cmd'
+          $bytes = [System.IO.File]::ReadAllBytes($cmd)
+          if ($bytes.Length -lt 9) { throw 'CMD demasiado corto.' }
+          if (($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) -or ($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE)) {
+            throw 'El CMD contiene BOM.'
+          }
+          $first = [System.Text.Encoding]::ASCII.GetString($bytes,0,9)
+          if ($first -ne '@echo off') { throw "Inicio CMD inesperado: $first" }
+          Write-Host 'CMD_SIN_BOM=APROBADO'
+
+      - name: Construir paquete final
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m02p03-rev2'
+          $name = 'AGROINPACO_ERP_M02_P03_D01_REV2_DIAGNOSTICO_TECNICO_SOLO_LECTURA_20260809'
+          $stageRoot = Join-Path $env:RUNNER_TEMP 'm02p03-rev2-package'
+          $stage = Join-Path $stageRoot $name
+          if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
+          New-Item $stage -ItemType Directory -Force | Out-Null
+          Copy-Item (Join-Path $source '*') -Destination $stage -Recurse -Force
+          @(
+            'VALIDACION_PREVIA=APROBADA',
+            'MOTOR=Windows PowerShell 5.1',
+            'ANALIZADOR=System.Management.Automation.Language.Parser.ParseFile',
+            'ARCHIVOS_PS1=4',
+            'ERRORES_SINTACTICOS=0',
+            'CONTRATO_SQL_ESCALAR=APROBADO',
+            'AUTOPRUEBA_SINTETICA=APROBADA',
+            'CMD_SIN_BOM=APROBADO',
+            'CODIGO_FINAL_AUTOPRUEBA=0',
+            'CAMBIOS_DATOS_AUTOPRUEBA=0',
+            'INTEGRIDAD_AUTOPRUEBA=FUENTE_INTACTA'
+          ) | Set-Content -LiteralPath (Join-Path $stage 'VALIDACION_PREVIA.txt') -Encoding UTF8
+          $manifest = Get-ChildItem $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
+            $relative = $_.FullName.Substring($stage.Length + 1)
+            '{0} *{1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash,$relative
+          }
+          $manifest | Set-Content -LiteralPath (Join-Path $stage 'MANIFIESTO_SHA256.txt') -Encoding ASCII
+          $zip = Join-Path $env:GITHUB_WORKSPACE ($name + '.zip')
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+          Write-Host ("PACKAGE_ZIP={0}" -f $zip)
+          Write-Host ("PACKAGE_SHA256={0}" -f (Get-FileHash $zip -Algorithm SHA256).Hash)
+
+      - name: Publicar paquete validado
+        uses: actions/upload-artifact@v4
+        with:
+          name: AGROINPACO_ERP_M02_P03_D01_REV2_DIAGNOSTICO_TECNICO_SOLO_LECTURA_20260809
+          path: AGROINPACO_ERP_M02_P03_D01_REV2_DIAGNOSTICO_TECNICO_SOLO_LECTURA_20260809.zip
+          if-no-files-found: error
+          retention-days: 7
