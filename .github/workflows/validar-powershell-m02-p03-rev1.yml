@@ -1,0 +1,71 @@
+name: Validar PowerShell M02-P03 REV1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'parser-test/m02p03-rev1/**'
+      - '.github/workflows/validar-powershell-m02-p03-rev1.yml'
+  workflow_dispatch:
+
+jobs:
+  parse-and-selftest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Analizador sintactico real de PowerShell
+        shell: pwsh
+        run: |
+          $base = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m02p03-rev1'
+          $files = Get-ChildItem -LiteralPath $base -Filter '*.ps1' -File -Recurse
+          if ($files.Count -ne 4) { throw "Se esperaban 4 archivos ps1 y se encontraron $($files.Count)." }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object {
+                Write-Error ("{0}: linea {1}, columna {2}: {3}" -f $file.Name,$_.Extent.StartLineNumber,$_.Extent.StartColumnNumber,$_.Message)
+              }
+              exit 1
+            }
+            Write-Host ("PARSER_OK={0};TOKENS={1}" -f $file.Name,$tokens.Count)
+          }
+
+      - name: Autoprueba sintetica en carpeta limpia
+        shell: pwsh
+        run: |
+          $base = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m02p03-rev1'
+          $root = Join-Path $env:RUNNER_TEMP 'm02p03-rev1-synthetic'
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          New-Item $root -ItemType Directory -Force | Out-Null
+          $content = @{
+            'src\AgroInpaco.Web\Components\Pages\Documentos\Operacion.razor' = 'MaxUploadBytes=50L*1024*1024 SaveTempAsync _templateId=_templates.FirstOrDefault ModuloOrigen EntidadOrigen IdRegistroOrigen /erp/auditoria /erp/informes'
+            'src\Legacy\AgroEmpaques.Application\Services\DocumentosService.vb' = 'Path.GetExtension TamanoMaximoMB BuscarTipoArchivo GuardarArchivo IdCategoriaDocumental IdCarpetaDocumental Extension'
+            'src\Legacy\AgroEmpaques.Infrastructure\Services\AlmacenDocumentalService.vb' = 'documentos_agroempaques.ini File.Copy CalcularHash RutaArchivo'
+            'src\Legacy\AgroEmpaques.Infrastructure\Services\ArchivoCargaMasivaReader.vb' = 'Path.GetExtension ZipFile.OpenRead File.ReadAllLines XDocument.Load CalcularHash GenerarPlantilla'
+            'src\Legacy\AgroEmpaques.Application\Services\CargaMasivaService.vb' = 'Hash CrearLote Procesar Validar PermiteProcesar'
+            'src\AgroInpaco.Web\Components\Pages\Terceros\Edit.razor' = '@bind Responsabilidad Contacto Direccion Rol Clasificacion TipoPersona TipoIdentificacion NumeroIdentificacion DigitoVerificacion'
+            'SQL\dummy.sql' = 'SELECT 1;'
+          }
+          foreach ($entry in $content.GetEnumerator()) {
+            $path = Join-Path $root $entry.Key
+            New-Item (Split-Path -Parent $path) -ItemType Directory -Force | Out-Null
+            Set-Content -LiteralPath $path -Value $entry.Value -Encoding UTF8
+          }
+          $script = Join-Path $base '01_EJECUTAR_DIAGNOSTICO_M02_P03_D01_REV1.ps1'
+          & $script -Root $root -OmitirSql
+          if ($LASTEXITCODE -ne 0) { throw "Autoprueba devolvio codigo $LASTEXITCODE." }
+          $zip = Get-ChildItem $base -Filter 'RESULTADOS_M02_P03_D01_REV1_*.zip' -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $zip) { throw 'No se genero el ZIP de resultados.' }
+          $check = Join-Path $env:RUNNER_TEMP 'm02p03-rev1-result'
+          if (Test-Path $check) { Remove-Item $check -Recurse -Force }
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $check -Force
+          $result = Get-Content -LiteralPath (Join-Path $check 'RESULTADO.txt') -Raw
+          foreach ($expected in @('SQL=OMITIDO','CAMBIOS_DATOS=0','INTEGRIDAD=FUENTE_INTACTA','CODIGO_FINAL=0')) {
+            if ($result -notmatch [regex]::Escape($expected)) { throw "Falta evidencia: $expected" }
+          }
+          $log = Get-Content -LiteralPath (Join-Path $check 'EJECUCION.log') -Raw
+          if ($log -notmatch 'CODIGO_FINAL=0') { throw 'El log empaquetado no contiene el cierre exitoso.' }
+          Write-Host 'AUTOPRUEBA_SINTETICA=APROBADA'
