@@ -1,0 +1,22 @@
+AGROINPACO ERP - M02-P03 D01 REV2
+DIAGNOSTICO TECNICO DE SOLO LECTURA
+
+1. Extraiga completamente el paquete.
+2. Cierre la aplicacion AGROINPACO ERP.
+3. Ejecute como administrador:
+   00_EJECUTAR_DIAGNOSTICO_M02_P03_D01_REV2.cmd
+4. Espere el cierre y verifique:
+   CODIGO_FINAL=0
+5. Envie el archivo generado:
+   RESULTADOS_M02_P03_D01_REV2_*.zip
+
+SEGURIDAD
+- No ejecuta INSERT, UPDATE, DELETE, MERGE, DDL, procedimientos, BACKUP, RESTORE ni DBCC.
+- Usa ApplicationIntent=ReadOnly.
+- No crea documentos, aprobaciones o lotes.
+- Compara SHA-256 de src y SQL antes y despues.
+
+REV2 CORRIGE
+- El contrato de retorno de las consultas SQL ahora es un conteo escalar de filas.
+- Evita que Windows PowerShell enumere un DataTable como DataRow y pierda la propiedad Rows.
+- El archivo CMD se entrega sin BOM para evitar el prefijo extrano antes de @echo off.
