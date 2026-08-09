@@ -1,0 +1,180 @@
+name: Validar PowerShell M03-P02 REV1A
+
+on:
+  push:
+    branches:
+      - 'm03p02-rev1a-validator-*'
+    paths:
+      - 'parser-test/m03p02-rev1a/**'
+      - '.github/workflows/validar-powershell-m03-p02-rev1a.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-package-scripts:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar .NET SDK 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Analizador sintactico real Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m03p02-rev1a\scripts'
+          $files = @(Get-ChildItem -LiteralPath $base -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
+          if ($files.Count -ne 4) { throw "Se esperaban 4 archivos ps1 y se encontraron $($files.Count)." }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object {
+                Write-Error ("{0}: linea {1}, columna {2}: {3}" -f $file.Name,$_.Extent.StartLineNumber,$_.Extent.StartColumnNumber,$_.Message)
+              }
+              exit 1
+            }
+            Write-Host ("PARSER_OK={0};TOKENS={1}" -f $file.Name,$tokens.Count)
+          }
+          Write-Host ("POWERSHELL_VERSION={0}" -f $PSVersionTable.PSVersion)
+          Write-Host 'ANALIZADOR=System.Management.Automation.Language.Parser.ParseFile'
+          Write-Host 'ERRORES_SINTACTICOS=0'
+
+      - name: Preparar contrato sintetico de tipos, rutas y manifiestos
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = Join-Path $env:GITHUB_WORKSPACE 'parser-test\m03p02-rev1a'
+          $source = Join-Path $env:RUNNER_TEMP 'AGROINPACO_M03_P02_FUENTE_SINTETICA'
+          if (Test-Path $source) { Remove-Item $source -Recurse -Force }
+          New-Item $source -ItemType Directory -Force | Out-Null
+          New-Item (Join-Path $package 'payload') -ItemType Directory -Force | Out-Null
+
+          Push-Location $source
+          try {
+            dotnet new sln -n AgroInpacoERP.Web --format sln
+            dotnet new console -n AgroInpaco.ContractChecks -o 'tests\AgroInpaco.ContractChecks' --framework net10.0 --no-restore
+            dotnet sln 'AgroInpacoERP.Web.sln' add 'tests\AgroInpaco.ContractChecks\AgroInpaco.ContractChecks.csproj'
+          }
+          finally { Pop-Location }
+
+          $targets = @(
+            'src\AgroInpaco.Web\Components\Pages\Tesoreria\Transacciones.razor',
+            'src\AgroInpaco.Web\Components\Pages\Tesoreria\ComprobanteEgreso.razor',
+            'src\Legacy\AgroEmpaques.Application\Services\TesoreriaService.vb',
+            'src\Legacy\AgroEmpaques.Application\Interfaces\ITesoreriaRepository.vb',
+            'src\Legacy\AgroEmpaques.Infrastructure\Repositories\TesoreriaRepository.DocumentosImpresion.vb',
+            'src\Legacy\AgroEmpaques.Domain\Entities\ComprasModelos.vb',
+            'src\Legacy\AgroEmpaques.Infrastructure\Repositories\ComprasRepository.FacturasCxp.vb',
+            'src\AgroInpaco.Web\Components\Pages\Compras\CuentasPorPagar.razor',
+            'src\AgroInpaco.Web\Components\Pages\Compras\Abastecimiento.razor',
+            'src\AgroInpaco.Web\Components\Pages\Compras\Anticipos.razor',
+            'tests\AgroInpaco.ContractChecks\Program.cs'
+          )
+
+          $rows = New-Object System.Collections.Generic.List[object]
+          foreach ($relative in $targets) {
+            $sourceFile = Join-Path $source $relative
+            $payloadFile = Join-Path (Join-Path $package 'payload') $relative
+            New-Item (Split-Path -Parent $sourceFile) -ItemType Directory -Force | Out-Null
+            New-Item (Split-Path -Parent $payloadFile) -ItemType Directory -Force | Out-Null
+            if ($relative -eq 'tests\AgroInpaco.ContractChecks\Program.cs') {
+              [System.IO.File]::WriteAllText($sourceFile, 'Console.WriteLine("BASELINE_CONTRACTCHECKS");', [System.Text.UTF8Encoding]::new($false))
+              [System.IO.File]::WriteAllText($payloadFile, 'Console.WriteLine("CONTRACT_CHECKS_PASSED");', [System.Text.UTF8Encoding]::new($false))
+            }
+            else {
+              [System.IO.File]::WriteAllText($sourceFile, ('BASE::{0}' -f $relative), [System.Text.UTF8Encoding]::new($false))
+              [System.IO.File]::WriteAllText($payloadFile, ('PAYLOAD::{0}' -f $relative), [System.Text.UTF8Encoding]::new($false))
+            }
+            $rows.Add([pscustomobject]@{
+              Ruta = $relative.Replace('\','/')
+              SHA256_Base = (Get-FileHash $sourceFile -Algorithm SHA256).Hash
+              SHA256_Payload = (Get-FileHash $payloadFile -Algorithm SHA256).Hash
+              Tamano_Base = (Get-Item $sourceFile).Length
+              Tamano_Payload = (Get-Item $payloadFile).Length
+            })
+          }
+          $rows | Export-Csv -LiteralPath (Join-Path $package 'MANIFIESTO_CAMBIOS_M03_P02_REV1A.tsv') -Delimiter "`t" -NoTypeInformation -Encoding UTF8
+
+          0..3 | ForEach-Object {
+            $cmdName = @('00_PREVALIDAR_M03_P02_REV1A.cmd','01_AUTOPRUEBA_M03_P02_REV1A.cmd','02_APLICAR_M03_P02_REV1A.cmd','03_REVERTIR_M03_P02_REV1A.cmd')[$_]
+            [System.IO.File]::WriteAllText((Join-Path $package $cmdName), "@echo off`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
+          }
+          "SYNTHETIC_SOURCE=$source" | Out-File -LiteralPath $env:GITHUB_ENV -Append -Encoding utf8
+          "SYNTHETIC_PACKAGE=$package" | Out-File -LiteralPath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host 'CONTRATO_SINTETICO=PREPARADO'
+
+      - name: Ejecutar prevalidacion real
+        shell: powershell
+        run: |
+          & "$env:SYNTHETIC_PACKAGE\scripts\PREVALIDAR_M03_P02_REV1A.ps1" -Root $env:SYNTHETIC_SOURCE -PackageRoot $env:SYNTHETIC_PACKAGE -NoEmpaquetarResultado
+          if ($LASTEXITCODE -ne 0) { throw "Prevalidacion fallo con codigo $LASTEXITCODE" }
+          Write-Host 'PREVALIDACION_SINTETICA=APROBADA'
+
+      - name: Ejecutar aplicacion, verificar payload y revertir
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = @(Import-Csv -LiteralPath "$env:SYNTHETIC_PACKAGE\MANIFIESTO_CAMBIOS_M03_P02_REV1A.tsv" -Delimiter "`t")
+          & "$env:SYNTHETIC_PACKAGE\scripts\APLICAR_M03_P02_REV1A.ps1" -Root $env:SYNTHETIC_SOURCE -PackageRoot $env:SYNTHETIC_PACKAGE -ConfirmarAplicacion
+          if ($LASTEXITCODE -ne 0) { throw "Aplicacion fallo con codigo $LASTEXITCODE" }
+          foreach ($row in $manifest) {
+            $path = Join-Path $env:SYNTHETIC_SOURCE ([string]$row.Ruta).Replace('/','\')
+            if ((Get-FileHash $path -Algorithm SHA256).Hash -ne [string]$row.SHA256_Payload) { throw "Payload no aplicado: $($row.Ruta)" }
+          }
+          Write-Host 'APLICACION_SINTETICA=APROBADA'
+
+          & "$env:SYNTHETIC_PACKAGE\scripts\REVERTIR_M03_P02_REV1A.ps1" -Root $env:SYNTHETIC_SOURCE -PackageRoot $env:SYNTHETIC_PACKAGE -ConfirmarReversion
+          if ($LASTEXITCODE -ne 0) { throw "Reversion fallo con codigo $LASTEXITCODE" }
+          foreach ($row in $manifest) {
+            $path = Join-Path $env:SYNTHETIC_SOURCE ([string]$row.Ruta).Replace('/','\')
+            if ((Get-FileHash $path -Algorithm SHA256).Hash -ne [string]$row.SHA256_Base) { throw "Base no restaurada: $($row.Ruta)" }
+          }
+          Write-Host 'REVERSION_SINTETICA=APROBADA'
+
+      - name: Ejecutar autoprueba en clon largo con acentos y .NET 10
+        shell: powershell
+        run: |
+          $dotnet = (Get-Command dotnet).Source
+          & "$env:SYNTHETIC_PACKAGE\scripts\AUTOPRUEBA_M03_P02_REV1A.ps1" -Root $env:SYNTHETIC_SOURCE -PackageRoot $env:SYNTHETIC_PACKAGE -DotNetPath $dotnet
+          if ($LASTEXITCODE -ne 0) { throw "Autoprueba fallo con codigo $LASTEXITCODE" }
+          $result = Get-ChildItem $env:SYNTHETIC_PACKAGE -Directory -Filter 'RESULTADOS_AUTOPRUEBA_M03_P02_REV1A_*' | Sort-Object Name -Descending | Select-Object -First 1
+          $text = Get-Content -LiteralPath (Join-Path $result.FullName 'RESULTADO_AUTOPRUEBA.txt') -Raw
+          foreach ($expected in @('CODIGO_FINAL=0','ANALIZADOR_POWERSHELL_REAL=True','COMPILACION_CLON_REBUILD=APROBADA','CONTRACTCHECKS_CLON=APROBADOS','RUTA_LARGA_Y_ACENTOS=APROBADA','FUENTE_OFICIAL_INTACTA=SI')) {
+            if ($text -notmatch [regex]::Escape($expected)) { throw "Falta evidencia: $expected" }
+          }
+          Write-Host 'AUTOPRUEBA_SINTETICA_END_TO_END=APROBADA'
+
+      - name: Reunir evidencias
+        shell: powershell
+        run: |
+          $evidence = Join-Path $env:GITHUB_WORKSPACE 'evidencia-m03p02-rev1a'
+          New-Item $evidence -ItemType Directory -Force | Out-Null
+          Get-ChildItem $env:SYNTHETIC_PACKAGE -Recurse -File | Where-Object {
+            $_.Name -like 'RESULTADO*.txt' -or $_.Name -like 'EJECUCION*.log' -or $_.Name -like '*.zip'
+          } | Copy-Item -Destination $evidence -Force
+          @(
+            'CODIGO_FINAL=0',
+            'MOTOR=Windows PowerShell 5.1',
+            'ANALIZADOR=System.Management.Automation.Language.Parser.ParseFile',
+            'ARCHIVOS_PS1=4',
+            'ERRORES_SINTACTICOS=0',
+            'PREVALIDACION_SINTETICA=APROBADA',
+            'APLICACION_SINTETICA=APROBADA',
+            'REVERSION_SINTETICA=APROBADA',
+            'AUTOPRUEBA_SINTETICA_END_TO_END=APROBADA',
+            'DOTNET_SDK=10',
+            'SQL_EJECUTADO=NO',
+            'CAMBIOS_DATOS=0'
+          ) | Set-Content -LiteralPath (Join-Path $evidence 'VALIDACION_GITHUB_ACTIONS.txt') -Encoding UTF8
+
+      - name: Publicar evidencias
+        uses: actions/upload-artifact@v4
+        with:
+          name: EVIDENCIA_M03_P02_REV1A_POWERSHELL_REAL
+          path: evidencia-m03p02-rev1a
+          if-no-files-found: error
+          retention-days: 7
