@@ -29,7 +29,7 @@ function Get-RelativePath {
 
 function Assert-Hash {
     param([string]$Path,[string]$Expected,[string]$Label)
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Falta archivo $Label: $Path" }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Falta archivo ${Label}: $Path" }
     $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
     if (-not [string]::Equals($actual,$Expected,[System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Huella distinta en $Label. Esperada=$Expected Actual=$actual Ruta=$Path"
