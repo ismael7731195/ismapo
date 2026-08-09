@@ -64,7 +64,7 @@ try{
     $SqlChecks | Export-Csv -LiteralPath (Join-Path $Out 'SQL_ESTADO.csv') -NoTypeInformation -Encoding UTF8
 
     $After = New-Snapshot -Base $Root -Path (Join-Path $Out 'HASHES_DESPUES.tsv')
-    $Changed = Compare-Snapshots -SnapshotBefore $Before -SnapshotAfter $After
+    $Changed = @(Compare-Snapshots -SnapshotBefore $Before -SnapshotAfter $After)
     $Integrity = if($Changed.Count -eq 0){ 'FUENTE_INTACTA' } else { 'FUENTE_MODIFICADA' }
     @('ESTADO=' + $Integrity,'ARCHIVOS_CAMBIADOS=' + $Changed.Count) + $Changed |
         Set-Content -LiteralPath (Join-Path $Out 'INTEGRIDAD.txt') -Encoding UTF8
