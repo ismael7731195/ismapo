@@ -1,0 +1,31 @@
+name: Validar PowerShell M02-P03
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'parser-test/01_EJECUTAR_DIAGNOSTICO_M02_P03_D01.ps1'
+      - '.github/workflows/validar-powershell-m02-p03.yml'
+  workflow_dispatch:
+
+jobs:
+  parse:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analizador sintactico real de PowerShell
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'parser-test/01_EJECUTAR_DIAGNOSTICO_M02_P03_D01.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object {
+              Write-Error ("Linea {0}, columna {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message)
+            }
+            exit 1
+          }
+          Write-Host 'PARSER_OK=TRUE'
+          Write-Host ("TOKENS={0}" -f $tokens.Count)
+          exit 0
