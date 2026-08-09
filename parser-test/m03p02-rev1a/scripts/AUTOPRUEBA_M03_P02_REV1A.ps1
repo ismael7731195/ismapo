@@ -13,7 +13,8 @@ $timestamp=Get-Date -Format 'yyyyMMdd_HHmmss'
 $resultRoot=Join-Path $PackageRoot ("RESULTADOS_AUTOPRUEBA_M03_P02_REV1A_{0}" -f $timestamp)
 $resultFile=Join-Path $resultRoot 'RESULTADO_AUTOPRUEBA.txt'
 $logFile=Join-Path $resultRoot 'EJECUCION_AUTOPRUEBA.log'
-$cloneRoot=Join-Path $env:TEMP ("AGROINPACO_M03_P02_REV1A_AUTOPRUEBA_RUTA_MUY_LARGA_CON_ACENTOS_Revision_Tecnica_{0}\Linea_base_clonada_para_compilacion_y_contractchecks" -f $timestamp)
+$accent=[char]0x00E9
+$cloneRoot=Join-Path $env:TEMP ("AGRO_M03_P02_REV1A_RUTA_LARGA_CON_ACENTO_Revision_T{0}cnica_{1}\Clon" -f $accent,$timestamp)
 
 function Write-Log{param([string]$Message)$line='[{0}] {1}' -f(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'),$Message;Write-Host $line;Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8}
 function Assert-Hash{param([string]$Path,[string]$Expected,[string]$Label)if(-not (Test-Path -LiteralPath $Path -PathType Leaf)){throw "Falta archivo ${Label}: $Path"};$actual=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash;if(-not [string]::Equals($actual,$Expected,[System.StringComparison]::OrdinalIgnoreCase)){throw "Huella distinta en $Label. Esperada=$Expected Actual=$actual Ruta=$Path"}}
