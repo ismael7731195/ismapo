@@ -16,7 +16,7 @@ $backupRoot = Join-Path $Root ("RESPALDOS_M03_P02_REV1A\{0}" -f $timestamp)
 $applied = New-Object System.Collections.Generic.List[string]
 
 function Write-Log { param([string]$Message) $line='[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'),$Message; Write-Host $line; Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 }
-function Assert-Hash { param([string]$Path,[string]$Expected,[string]$Label) if(-not (Test-Path -LiteralPath $Path -PathType Leaf)){throw "Falta archivo $Label: $Path"};$actual=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash;if(-not [string]::Equals($actual,$Expected,[System.StringComparison]::OrdinalIgnoreCase)){throw "Huella distinta en $Label. Esperada=$Expected Actual=$actual Ruta=$Path"} }
+function Assert-Hash { param([string]$Path,[string]$Expected,[string]$Label) if(-not (Test-Path -LiteralPath $Path -PathType Leaf)){throw "Falta archivo ${Label}: $Path"};$actual=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash;if(-not [string]::Equals($actual,$Expected,[System.StringComparison]::OrdinalIgnoreCase)){throw "Huella distinta en $Label. Esperada=$Expected Actual=$actual Ruta=$Path"} }
 function Copy-Atomic { param([string]$Source,[string]$Destination) $parent=Split-Path -Parent $Destination;New-Item -ItemType Directory -Path $parent -Force|Out-Null;$temp="$Destination.m03p02.tmp";Copy-Item -LiteralPath $Source -Destination $temp -Force;Move-Item -LiteralPath $temp -Destination $Destination -Force }
 
 try {
