@@ -102,17 +102,22 @@ finally{
             'Diagnóstico incompleto; revisar ERROR_RAIZ y SQL_ESTADO antes de continuar.'
         }
         $errorText = if($null -eq $RootError){ '' } else { $RootError }
-        @(
-            'AGROINPACO ERP - M02-P03 D01 REV1',
-            'DIAGNOSTICO_TECNICO=SOLO_LECTURA',
-            'SQL=' + $SqlState,
-            'CAMBIOS_DATOS=0',
-            'INTEGRIDAD=' + $Integrity,
-            'HALLAZGOS=' + $Findings.Count,
-            'CODIGO_FINAL=' + $FinalCode,
-            'ERROR_RAIZ=' + $errorText,
-            'CONCLUSION=' + $conclusion
-        ) | Set-Content -LiteralPath (Join-Path $Out 'RESULTADO.txt') -Encoding UTF8
+        $resultLines = New-Object System.Collections.Generic.List[string]
+        [void]$resultLines.Add('AGROINPACO ERP - M02-P03 D01 REV1')
+        [void]$resultLines.Add('DIAGNOSTICO_TECNICO=SOLO_LECTURA')
+        [void]$resultLines.Add(('SQL={0}' -f $SqlState))
+        [void]$resultLines.Add('CAMBIOS_DATOS=0')
+        [void]$resultLines.Add(('INTEGRIDAD={0}' -f $Integrity))
+        [void]$resultLines.Add(('HALLAZGOS={0}' -f $Findings.Count))
+        [void]$resultLines.Add(('CODIGO_FINAL={0}' -f $FinalCode))
+        [void]$resultLines.Add(('ERROR_RAIZ={0}' -f $errorText))
+        [void]$resultLines.Add(('CONCLUSION={0}' -f $conclusion))
+        $utf8 = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllLines(
+            (Join-Path $Out 'RESULTADO.txt'),
+            [string[]]$resultLines,
+            $utf8
+        )
 
         $level = if($FinalCode -eq 0){ 'INFO' } else { 'ERROR' }
         Write-Log ('Fin del diagnóstico. CODIGO_FINAL=' + $FinalCode) $level
